@@ -35,6 +35,17 @@ From the repository root (full **Xcode** recommended if you want a **universal**
 - **Dock icon:** a **waveform** SF Symbol is applied at launch as a placeholder until you add a real icon (`.icns` / asset catalog in your shipping app bundle).
 - **Each internal drop:** bump `AppInfo.marketingVersion` / `AppInfo.build`, set `AppInfo.feedbackContact`, and ship the DMG or zip with a name that includes version + build.
 
+## GitHub Releases
+
+Published builds live under [Releases](https://github.com/popollz/SqTr/releases). For a new version: bump `AppInfo`, run `./scripts/make-dmg.sh`, commit and push, then tag and publish (example with [GitHub CLI](https://cli.github.com/) `gh`):
+
+```bash
+git tag -a v0.1.1 -m "Swift SeqTrace 0.1.1 (build 1)"
+git push origin v0.1.1
+gh release create v0.1.1 "./dist/SwiftSeqTrace-0.1.1-b1.dmg" --repo popollz/SqTr \
+  --title "Swift SeqTrace 0.1.1 (build 1)" --notes "Short release notes here."
+```
+
 ## Current status
 
 - Opens `.ab1` files using an Open Panel
