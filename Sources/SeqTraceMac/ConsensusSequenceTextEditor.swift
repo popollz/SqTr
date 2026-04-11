@@ -1,0 +1,252 @@
+import AppKit
+import SwiftUI
+
+/// Wrapped consensus editor with base coloring and context menu (pair / contig).
+struct ConsensusSequenceTextEditor: NSViewRepresentable {
+    @Binding var cells: [ConsensusCell]
+    @Binding var selectedUnwrapped: NSRange
+
+    var lineLength: Int = 80
+    var forwardBaseAt: (Int) -> Character?
+    var reverseBaseAt: (Int) -> Character?
+
+    init(
+        cells: Binding<[ConsensusCell]>,
+        selectedUnwrapped: Binding<NSRange>,
+        lineLength: Int = 80,
+        forwardBaseAt: @escaping (Int) -> Character?,
+        reverseBaseAt: @escaping (Int) -> Character?
+    ) {
+        _cells = cells
+        _selectedUnwrapped = selectedUnwrapped
+        self.lineLength = lineLength
+        self.forwardBaseAt = forwardBaseAt
+        self.reverseBaseAt = reverseBaseAt
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+
+        let tv = SequenceColoredTextView()
+        tv.menuMode = .pairConsensus
+        tv.delegate = context.coordinator
+        tv.isRichText = true
+        tv.importsGraphics = false
+        let font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        tv.font = font
+        tv.typingAttributes = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor,
+        ]
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.isAutomaticTextReplacementEnabled = false
+        tv.allowsUndo = false
+        tv.textContainer?.widthTracksTextView = true
+        tv.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+
+        let proxy = SequenceMenuProxy()
+        let coord = context.coordinator
+        proxy.onCut = { [weak coord] in coord?.performCutFromMenu() }
+        proxy.onCopySelection = { [weak coord] in coord?.performCopySelectionFromMenu() }
+        proxy.onDelete = { [weak coord] in coord?.performDeleteFromMenu() }
+        proxy.onReplaceN = { [weak coord] in coord?.performReplaceNFromMenu() }
+        proxy.onUseForward = { [weak coord] in coord?.performUseForwardFromMenu() }
+        proxy.onUseReverse = { [weak coord] in coord?.performUseReverseFromMenu() }
+        tv.menuProxy = proxy
+        coord.menuProxy = proxy
+
+        scroll.documentView = tv
+        coord.textView = tv
+
+        return scroll
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let tv = context.coordinator.textView else { return }
+        context.coordinator.parent = self
+        let wrapped = SequenceWrapMath.wrapText(String(cells.map(\.base)), lineLength: lineLength)
+        if tv.string != wrapped {
+            context.coordinator.isProgrammaticStringUpdate = true
+            context.coordinator.setWrappedAttributed(wrapped, on: tv)
+            context.coordinator.isProgrammaticStringUpdate = false
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ConsensusSequenceTextEditor
+        weak var textView: SequenceColoredTextView?
+        weak var menuProxy: SequenceMenuProxy?
+        var isProgrammaticStringUpdate = false
+        var isProgrammaticSelectionUpdate = false
+
+        init(_ parent: ConsensusSequenceTextEditor) {
+            self.parent = parent
+        }
+
+        func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+            guard let proxy = menuProxy else { return menu }
+            return SequenceContextMenu.makeMenu(proxy: proxy, style: .pairConsensus)
+        }
+
+        func setWrappedAttributed(_ wrapped: String, on tv: NSTextView) {
+            let font = tv.font ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            let attr = SequenceBaseColors.attributedString(for: wrapped, font: font)
+            tv.textStorage?.setAttributedString(attr)
+        }
+
+        private func currentLinearSelection() -> NSRange {
+            guard let tv = textView else { return NSRange(location: 0, length: 0) }
+            let wr = tv.selectedRange()
+            let wrapped = tv.string as NSString
+            return SequenceWrapMath.linearRange(fromWrappedSelection: wr, in: wrapped as String)
+        }
+
+        func performCopySelectionFromMenu() {
+            let lin = currentLinearSelection()
+            let cells = parent.cells
+            if lin.length > 0 {
+                let end = min(lin.location + lin.length, cells.count)
+                guard lin.location < end else { return }
+                let text = String(cells[lin.location..<end].map(\.base))
+                SequenceClipboard.copyPlainText(text)
+            } else if lin.location < cells.count {
+                SequenceClipboard.copyPlainText(String(cells[lin.location].base))
+            }
+        }
+
+        func performCutFromMenu() {
+            guard let tv = textView else { return }
+            let lin = currentLinearSelection()
+            let cells = parent.cells
+            if lin.length > 0 {
+                let end = min(lin.location + lin.length, cells.count)
+                guard lin.location < end else { return }
+                let text = String(cells[lin.location..<end].map(\.base))
+                SequenceClipboard.copyPlainText(text)
+                apply(linearLoc: lin.location, linearLen: lin.length, replacement: "", on: tv)
+            } else if lin.location < cells.count {
+                SequenceClipboard.copyPlainText(String(cells[lin.location].base))
+                apply(linearLoc: lin.location, linearLen: 1, replacement: "", on: tv)
+            }
+        }
+
+        func performDeleteFromMenu() {
+            guard let tv = textView else { return }
+            let lin = currentLinearSelection()
+            if lin.length > 0 {
+                apply(linearLoc: lin.location, linearLen: lin.length, replacement: "", on: tv)
+            } else if lin.location < parent.cells.count {
+                apply(linearLoc: lin.location, linearLen: 1, replacement: "", on: tv)
+            }
+        }
+
+        func performReplaceNFromMenu() {
+            guard let tv = textView else { return }
+            let lin = currentLinearSelection()
+            if lin.length > 0 {
+                let repl = String(repeating: "N", count: lin.length)
+                apply(linearLoc: lin.location, linearLen: lin.length, replacement: repl, on: tv)
+            } else if lin.location < parent.cells.count {
+                apply(linearLoc: lin.location, linearLen: 1, replacement: "N", on: tv)
+            }
+        }
+
+        func performUseForwardFromMenu() {
+            applyTraceBasesFromMenu(forward: true)
+        }
+
+        func performUseReverseFromMenu() {
+            applyTraceBasesFromMenu(forward: false)
+        }
+
+        private func applyTraceBasesFromMenu(forward: Bool) {
+            guard let tv = textView else { return }
+            let lin = currentLinearSelection()
+            var next = parent.cells
+            let indices: [Int] = {
+                if lin.length > 0 {
+                    return Array(lin.location ..< min(lin.location + lin.length, next.count))
+                }
+                if lin.location < next.count { return [lin.location] }
+                return []
+            }()
+            for idx in indices {
+                let ch: Character?
+                if forward {
+                    ch = parent.forwardBaseAt(idx)
+                } else {
+                    ch = parent.reverseBaseAt(idx)
+                }
+                if let ch {
+                    next[idx].base = ch
+                }
+            }
+            parent.cells = next
+            let newWrapped = SequenceWrapMath.wrapText(String(next.map(\.base)), lineLength: parent.lineLength)
+            isProgrammaticStringUpdate = true
+            setWrappedAttributed(newWrapped, on: tv)
+            isProgrammaticStringUpdate = false
+            let wrappedSel = SequenceWrapMath.wrappedRange(fromUnwrapped: lin, in: newWrapped)
+            isProgrammaticSelectionUpdate = true
+            tv.setSelectedRange(wrappedSel)
+            isProgrammaticSelectionUpdate = false
+            parent.selectedUnwrapped = lin
+        }
+
+        private func apply(linearLoc: Int, linearLen: Int, replacement: String, on tv: NSTextView) {
+            let repl = replacement.replacingOccurrences(of: "\n", with: "")
+            if linearLen == 0, !repl.isEmpty {
+                return
+            }
+            var next = parent.cells
+            next.applyLinearEdit(location: linearLoc, length: linearLen, replacement: repl)
+            parent.cells = next
+
+            let newWrapped = SequenceWrapMath.wrapText(String(next.map(\.base)), lineLength: parent.lineLength)
+            isProgrammaticStringUpdate = true
+            setWrappedAttributed(newWrapped, on: tv)
+            isProgrammaticStringUpdate = false
+
+            let newLinearPos = linearLoc + repl.count
+            let clamped = max(0, min(newLinearPos, next.count))
+            let newSel = NSRange(location: clamped, length: 0)
+            parent.selectedUnwrapped = newSel
+            let wrappedSel = SequenceWrapMath.wrappedRange(fromUnwrapped: newSel, in: newWrapped)
+            isProgrammaticSelectionUpdate = true
+            tv.setSelectedRange(wrappedSel)
+            isProgrammaticSelectionUpdate = false
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            let repl = (replacementString ?? "").replacingOccurrences(of: "\n", with: "")
+            let wrapped = textView.string as NSString
+            let (linearLoc, linearLen) = SequenceWrapMath.wrappedToLinear(wrapped as String, affectedRange: affectedCharRange)
+            if linearLen == 0, !repl.isEmpty {
+                return false
+            }
+            apply(linearLoc: linearLoc, linearLen: linearLen, replacement: repl, on: textView)
+            return false
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = textView, !isProgrammaticSelectionUpdate, !isProgrammaticStringUpdate else { return }
+            let wrapped = tv.string as NSString
+            let wr = tv.selectedRange()
+            let linear = SequenceWrapMath.linearRange(fromWrappedSelection: wr, in: wrapped as String)
+            if parent.selectedUnwrapped != linear {
+                parent.selectedUnwrapped = linear
+            }
+        }
+    }
+}
