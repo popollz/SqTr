@@ -49,7 +49,6 @@ gh release create v0.1.1 "./dist/SwiftSeqTrace-0.1.1-b1.dmg" --repo popollz/SqTr
 ## Current status
 
 - Opens `.ab1` files using an Open Panel
-- Parses `DATA9..DATA12` and draws 4 channels
-
-Notes:
-- Different instruments may store channel order differently (via `FWO_1`). This initial version assumes `DATA9=A`, `DATA10=C`, `DATA11=G`, `DATA12=T` and will be corrected next.
+- Picks the best 4-channel `DATA` set (prefers `DATA9..DATA12`; falls back to `DATA1..DATA4` or the largest consistent set)
+- Maps channels to bases using the instrument's `FWO_1` tag when present; falls back to positional mapping (`DATA9=A`, `DATA10=C`, `DATA11=G`, `DATA12=T`) when `FWO_1` is absent
+- Unit-tested: see `Tests/SeqTraceMacTests/` (run with `swift test` or **⌘U** in Xcode)

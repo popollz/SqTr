@@ -201,7 +201,7 @@ enum ABITraceReader {
         throw ABIFError.missingTag(name: "DATA", number: 9)
     }
 
-    private static func parseFWO(_ raw: String) -> [String]? {
+    internal static func parseFWO(_ raw: String) -> [String]? {
         let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let chars = cleaned.map { String($0) }.filter { ["A", "C", "G", "T"].contains($0) }
         return chars.count == 4 ? chars : nil

@@ -29,7 +29,7 @@ Menu shortcuts match the buttons where shown.
 
 ## Limitations (this milestone)
 
-- Channel order is assumed as **DATA9=A, DATA10=C, DATA11=G, DATA12=T**. Some instruments encode order in **FWO_1**; results may look wrong until that is implemented.
+- Channel order is read from the instrument's **FWO_1** tag when present; if it is missing, the app falls back to positional mapping (**DATA9=A, DATA10=C, DATA11=G, DATA12=T**). If traces ever look mis-assigned to the wrong base, please share the file via the feedback contact shown in **About**.
 - This is an **early internal** build: expect rough edges.
 
 ## Where to get help in the app
