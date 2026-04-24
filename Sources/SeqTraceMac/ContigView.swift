@@ -38,27 +38,24 @@ struct ContigView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                GroupBox("Chromatograms") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        ChromatogramView(
-                            trace: result.forwardTrace,
-                            title: "Forward: \(result.forwardName)",
-                            showSequencePanel: false,
-                            externalHighlightSampleRange: highlightSampleRange(for: .forward),
-                            controls: $forwardControls
-                        )
-                        .frame(minHeight: 360)
+                VStack(alignment: .leading, spacing: 14) {
+                    ChromatogramView(
+                        trace: result.forwardTrace,
+                        title: "Forward: \(result.forwardName)",
+                        showSequencePanel: false,
+                        externalHighlightSampleRange: highlightSampleRange(for: .forward),
+                        controls: $forwardControls
+                    )
+                    .frame(minHeight: 360)
 
-                        ChromatogramView(
-                            trace: result.orientedReverseTrace,
-                            title: "Reverse: \(result.reverseName)\(result.reverseWasReverseComplemented ? " (oriented)" : "")",
-                            showSequencePanel: false,
-                            externalHighlightSampleRange: highlightSampleRange(for: .reverse),
-                            controls: $reverseControls
-                        )
-                        .frame(minHeight: 360)
-                    }
-                    .padding(.vertical, 6)
+                    ChromatogramView(
+                        trace: result.orientedReverseTrace,
+                        title: "Reverse: \(result.reverseName)\(result.reverseWasReverseComplemented ? " (oriented)" : "")",
+                        showSequencePanel: false,
+                        externalHighlightSampleRange: highlightSampleRange(for: .reverse),
+                        controls: $reverseControls
+                    )
+                    .frame(minHeight: 360)
                 }
 
                 GroupBox("Consensus") {
