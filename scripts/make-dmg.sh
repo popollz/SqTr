@@ -23,9 +23,11 @@ trap cleanup EXIT
 echo "==> ${DISPLAY_APP_NAME} — version ${MARKETING_VERSION} (build ${BUILD_NUMBER})"
 
 echo "==> swift build -c release"
+UNIVERSAL_BUILD_OK=0
 if [[ "${BUILD_UNIVERSAL:-0}" == "1" ]]; then
   if swift build -c release --arch arm64 --arch x86_64 2>/dev/null; then
     echo "    (universal binary)"
+    UNIVERSAL_BUILD_OK=1
   else
     echo "    Universal build failed (install full Xcode or unset BUILD_UNIVERSAL). Falling back to host arch only."
     swift build -c release
@@ -34,7 +36,14 @@ else
   swift build -c release
 fi
 
-BIN_DIR="$(swift build -c release --show-bin-path)"
+# When building universally via xcbuild, outputs live under .build/apple/Products/Release
+# and `swift build --show-bin-path` (without --arch flags) returns the host-arch path
+# instead, so we need to look in the xcbuild location first.
+if [[ "$UNIVERSAL_BUILD_OK" == "1" && -x "${ROOT}/.build/apple/Products/Release/SeqTraceMac" ]]; then
+  BIN_DIR="${ROOT}/.build/apple/Products/Release"
+else
+  BIN_DIR="$(swift build -c release --show-bin-path)"
+fi
 EXEC="${BIN_DIR}/SeqTraceMac"
 BUNDLE="${BIN_DIR}/SeqTraceMac_SeqTraceMac.bundle"
 
