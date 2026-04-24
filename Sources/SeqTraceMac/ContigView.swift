@@ -49,7 +49,10 @@ struct ContigView: View {
                         title: "Forward: \(result.forwardName)",
                         showSequencePanel: false,
                         externalHighlightSampleRange: highlightSampleRange(for: .forward),
-                        controls: $forwardControls
+                        controls: $forwardControls,
+                        onBaseTapped: { baseIdx in
+                            selectConsensus(fromReadBaseIdx: baseIdx, side: .forward)
+                        }
                     )
                     .frame(minHeight: 360)
 
@@ -58,7 +61,10 @@ struct ContigView: View {
                         title: "Reverse: \(result.reverseName)\(result.reverseWasReverseComplemented ? " (oriented)" : "")",
                         showSequencePanel: false,
                         externalHighlightSampleRange: highlightSampleRange(for: .reverse),
-                        controls: $reverseControls
+                        controls: $reverseControls,
+                        onBaseTapped: { baseIdx in
+                            selectConsensus(fromReadBaseIdx: baseIdx, side: .reverse)
+                        }
                     )
                     .frame(minHeight: 360)
                 }
@@ -181,6 +187,40 @@ struct ContigView: View {
             }
         }
         return nil
+    }
+
+    /// Handle a tap on one of the chromatograms: translate the clicked read
+    /// base index into a consensus index and move the consensus caret, which
+    /// already drives both chromatograms' highlights via `highlightSampleRange`.
+    private func selectConsensus(fromReadBaseIdx baseIdx: Int, side: ReadSide) {
+        guard let consIdx = consensusIndex(forReadBaseIdx: baseIdx, side: side) else { return }
+        selectedConsensusUnwrapped = NSRange(location: consIdx, length: 0)
+    }
+
+    /// Map a read-local base index (forward or reverse) to the nearest cell in
+    /// `consensusCells`. The consensus may skip over columns the two reads
+    /// disagree on, so we pick the closest consensus cell rather than requiring
+    /// an exact column match.
+    private func consensusIndex(forReadBaseIdx baseIdx: Int, side: ReadSide) -> Int? {
+        let indexByColumn: [Int?]
+        switch side {
+        case .forward: indexByColumn = result.forwardBaseIndexByColumn
+        case .reverse: indexByColumn = result.reverseBaseIndexByColumn
+        }
+
+        guard let col = indexByColumn.firstIndex(where: { $0 == baseIdx }) else { return nil }
+        guard !consensusCells.isEmpty else { return nil }
+
+        var bestIdx = 0
+        var bestDist = abs(consensusCells[0].column - col)
+        for i in 1..<consensusCells.count {
+            let d = abs(consensusCells[i].column - col)
+            if d < bestDist {
+                bestDist = d
+                bestIdx = i
+            }
+        }
+        return bestIdx
     }
 
     private func sampleIndex(for side: ReadSide, consensusIndex: Int) -> Int? {

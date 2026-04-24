@@ -48,7 +48,25 @@ gh release create v0.1.1 "./dist/SwiftSeqTrace-0.1.1-b1.dmg" --repo popollz/SqTr
 
 ## Current status
 
-- Opens `.ab1` files using an Open Panel
-- Picks the best 4-channel `DATA` set (prefers `DATA9..DATA12`; falls back to `DATA1..DATA4` or the largest consistent set)
-- Maps channels to bases using the instrument's `FWO_1` tag when present; falls back to positional mapping (`DATA9=A`, `DATA10=C`, `DATA11=G`, `DATA12=T`) when `FWO_1` is absent
-- Unit-tested: see `Tests/SeqTraceMacTests/` (run with `swift test` or **⌘U** in Xcode)
+### File handling
+
+- Opens `.ab1` files using an Open Panel (single trace or **forward + reverse pair** for contig assembly).
+- Picks the best 4-channel `DATA` set (prefers `DATA9..DATA12`; falls back to `DATA1..DATA4` or the largest consistent set).
+- Maps channels to bases using the instrument's `FWO_1` tag when present; falls back to positional mapping (`DATA9=A`, `DATA10=C`, `DATA11=G`, `DATA12=T`) when `FWO_1` is absent.
+- Unit-tested: see `Tests/SeqTraceMacTests/` (run with `swift test` or **⌘U** in Xcode).
+
+### Chromatogram view (4Peaks-style)
+
+- **Dynamic header:** shows `Base L N, Quality: Q` for the currently selected base (color-coded A/C/G/T); shows `Base —` before the user interacts.
+- **Top DNA strip** of colored base letters above the four traces.
+- **Quality histogram** (pale blue bars behind the traces) with dashed **Q20** and **Q30** reference lines.
+- **Translucent blue selection column** spanning the full canvas height, with outline on both edges when a range is selected.
+- **Minimal toolbar:** gear popover (Peak-height + Pan), horizontal-zoom slider with `N×` readout, copy-sequence icon.
+- **Collapsible `Sequence` drawer** with a full-featured editable NSTextView (closed by default).
+
+### Interactions on the canvas
+
+- **Click** anywhere on the trace → select the nearest base; header + selection column update instantly.
+- **Click-drag** on the trace → pan left/right.
+- **Pinch** (trackpad) → horizontal zoom around the current view center.
+- In **contig view**, clicking either forward or reverse chromatogram moves the **consensus caret**, which re-highlights both chromatograms in sync.

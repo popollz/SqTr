@@ -26,6 +26,10 @@ struct ChromatogramView: View {
     var externalHighlightSampleRange: ClosedRange<Int>? = nil
     /// Optional external control for pan/zoom (used to keep multiple chromatograms in sync).
     var controls: Binding<ChromatogramControls>? = nil
+    /// Optional external tap handler. Called with the 0-based index of the base
+    /// whose peak is nearest the click. When this view also owns the sequence
+    /// drawer (single-trace mode), the internal caret is moved as well.
+    var onBaseTapped: ((Int) -> Void)? = nil
 
     @State private var zoomX: Double = 1.0
     @State private var offsetX: Double = 0.0
@@ -34,19 +38,25 @@ struct ChromatogramView: View {
     @State private var selectedUnwrapped: NSRange = NSRange(location: 0, length: 0)
     @State private var isSequenceExpanded: Bool = false
     @State private var showGearPopover: Bool = false
+    /// True once the user has actually moved the caret / made a selection in the
+    /// sequence drawer. We stay `false` on initial load so the header shows a
+    /// neutral placeholder instead of claiming position 1 is "selected".
+    @State private var hasUserSelected: Bool = false
 
     init(
         trace: ABITrace,
         title: String? = nil,
         showSequencePanel: Bool = true,
         externalHighlightSampleRange: ClosedRange<Int>? = nil,
-        controls: Binding<ChromatogramControls>? = nil
+        controls: Binding<ChromatogramControls>? = nil,
+        onBaseTapped: ((Int) -> Void)? = nil
     ) {
         self.trace = trace
         self.title = title
         self.showSequencePanel = showSequencePanel
         self.externalHighlightSampleRange = externalHighlightSampleRange
         self.controls = controls
+        self.onBaseTapped = onBaseTapped
         _edited = State(initialValue: EditedBaseCalls(trace: trace))
         _selectedUnwrapped = State(initialValue: NSRange(location: 0, length: 0))
     }
@@ -68,9 +78,12 @@ struct ChromatogramView: View {
                 peakLocations: edited.peakLocations,
                 qualities: edited.qualities,
                 highlightSampleRange: computedHighlightSampleRange(),
-                zoomX: zoomXBinding.wrappedValue,
+                zoomX: zoomXBinding,
                 zoomY: zoomYBinding.wrappedValue,
-                offsetX: offsetXBinding.wrappedValue
+                offsetX: offsetXBinding,
+                onBaseTapped: { baseIdx in
+                    handleCanvasTap(baseIdx: baseIdx)
+                }
             )
 
             toolbar(
@@ -87,6 +100,13 @@ struct ChromatogramView: View {
             edited = EditedBaseCalls(trace: trace)
             selectedUnwrapped = NSRange(location: 0, length: 0)
             isSequenceExpanded = false
+            hasUserSelected = false
+        }
+        .onChange(of: selectedUnwrapped.location) { newLoc in
+            if newLoc != 0 { hasUserSelected = true }
+        }
+        .onChange(of: selectedUnwrapped.length) { newLen in
+            if newLen > 0 { hasUserSelected = true }
         }
     }
 
@@ -95,26 +115,8 @@ struct ChromatogramView: View {
     @ViewBuilder
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if let info = currentBaseInfo {
-                HStack(spacing: 2) {
-                    Text("Base ")
-                        .foregroundStyle(.secondary)
-                    Text(info.letter)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(baseColor(info.letter))
-                    Text("\(info.oneBasedIndex)")
-                        .fontWeight(.semibold)
-                    if let q = info.quality {
-                        Text(", Quality: \(q)")
-                            .foregroundStyle(.secondary)
-                    }
-                }
+            headerLeading
                 .font(.system(size: 13))
-            } else {
-                Text("\(trace.sampleCount) samples")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
 
             Spacer()
 
@@ -126,15 +128,83 @@ struct ChromatogramView: View {
         }
     }
 
+    @ViewBuilder
+    private var headerLeading: some View {
+        if let info = currentBaseInfo {
+            HStack(spacing: 2) {
+                Text("Base ")
+                    .foregroundStyle(.secondary)
+                Text(info.letter)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(baseColor(info.letter))
+                Text("\(info.oneBasedIndex)")
+                    .fontWeight(.semibold)
+                if let q = info.quality {
+                    Text(", Quality: \(q)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else if edited.bases.isEmpty {
+            Text("\(trace.sampleCount) samples")
+                .foregroundStyle(.secondary)
+        } else {
+            HStack(spacing: 2) {
+                Text("Base ")
+                    .foregroundStyle(.secondary)
+                Text("—")
+                    .foregroundStyle(.secondary)
+            }
+            .help("Click a base in the trace (or open the sequence drawer below) to see its quality.")
+        }
+    }
+
     private var currentBaseInfo: (letter: String, oneBasedIndex: Int, quality: UInt8?)? {
         guard !edited.bases.isEmpty else { return nil }
+
+        // Contig view path: derive the focused base from the externally-supplied
+        // sample range (we find the base whose peak is nearest the range's start).
+        if let ext = externalHighlightSampleRange,
+           let baseIdx = nearestBaseIndex(toSample: ext.lowerBound) {
+            return baseInfo(at: baseIdx)
+        }
+
+        // Single-trace view path: only reflect the sequence drawer's caret once
+        // the user has actually moved it. On initial load we return nil so the
+        // header shows an honest "Base —" placeholder instead of the low-quality
+        // first base of the read.
+        guard hasUserSelected else { return nil }
         let loc = selectedUnwrapped.location
         guard loc >= 0, loc < edited.bases.count else { return nil }
-        let letter = String(edited.bases[loc]).uppercased()
+        return baseInfo(at: loc)
+    }
+
+    private func baseInfo(at idx: Int) -> (letter: String, oneBasedIndex: Int, quality: UInt8?)? {
+        guard idx >= 0, idx < edited.bases.count else { return nil }
+        let letter = String(edited.bases[idx]).uppercased()
         let quality = edited.qualities.flatMap { qs in
-            (loc < qs.count) ? qs[loc] : nil
+            (idx < qs.count) ? qs[idx] : nil
         }
-        return (letter, loc + 1, quality)
+        return (letter, idx + 1, quality)
+    }
+
+    /// Binary-search the peak-location array for the base whose peak is nearest to `sample`.
+    private func nearestBaseIndex(toSample sample: Int) -> Int? {
+        let peaks = edited.peakLocations
+        guard !peaks.isEmpty else { return nil }
+        var lo = 0
+        var hi = peaks.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if peaks[mid] < sample {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+        if lo > 0 && abs(peaks[lo - 1] - sample) < abs(peaks[lo] - sample) {
+            return lo - 1
+        }
+        return lo
     }
 
     // MARK: - Bottom toolbar (minimal, 4Peaks-style)
@@ -254,6 +324,21 @@ struct ChromatogramView: View {
         }
     }
 
+    /// Called when the user clicks/taps inside the chromatogram canvas.
+    /// In single-trace mode we move the internal caret so the header/column
+    /// reflect the click. When an external handler is provided (e.g. contig
+    /// view), it is also invoked so the parent can translate the per-trace
+    /// base index into its own coordinate system (e.g. consensus index).
+    private func handleCanvasTap(baseIdx: Int) {
+        guard baseIdx >= 0, baseIdx < edited.bases.count else { return }
+
+        if showSequencePanel {
+            selectedUnwrapped = NSRange(location: baseIdx, length: 0)
+            hasUserSelected = true
+        }
+        onBaseTapped?(baseIdx)
+    }
+
     private func computedHighlightSampleRange() -> ClosedRange<Int>? {
         if let ext = externalHighlightSampleRange {
             return ext
@@ -289,9 +374,14 @@ private struct ChromatogramCanvas: View {
     let peakLocations: [Int]
     let qualities: [UInt8]?
     let highlightSampleRange: ClosedRange<Int>?
-    let zoomX: Double
+    @Binding var zoomX: Double
+    /// Y-zoom is read-only from the canvas's perspective: gestures only touch
+    /// zoomX/offsetX. Keeping this as a plain value avoids a Swift 6
+    /// `@Sendable` capture warning from the nested y() function.
     let zoomY: Double
-    let offsetX: Double
+    @Binding var offsetX: Double
+    /// Called with the 0-based base index whose peak is nearest a click/tap.
+    var onBaseTapped: ((Int) -> Void)? = nil
 
     /// Height of the colored DNA strip drawn at the top of the canvas.
     private let stripHeight: Double = 22
@@ -299,6 +389,20 @@ private struct ChromatogramCanvas: View {
     private let singleBaseColumnWidth: Double = 16
     /// Max PHRED score used when normalizing the quality histogram.
     private let maxPhred: Double = 60
+
+    // MARK: - Gesture anchors (captured at gesture start, cleared on end)
+
+    /// offsetX at the moment a pan drag began (so we can apply cumulative translation).
+    @State private var panBaseOffset: Double? = nil
+    /// zoomX at the moment a pinch began.
+    @State private var pinchBaseZoom: Double? = nil
+    /// offsetX at the moment a pinch began (so we can preserve the visible center).
+    @State private var pinchBaseOffset: Double? = nil
+
+    /// Zoom clamp range — matches the toolbar slider.
+    private let zoomRange: ClosedRange<Double> = 1...12
+    /// Movement threshold (in points) that distinguishes a tap from a pan.
+    private let tapDragThreshold: Double = 5
 
     var body: some View {
         GeometryReader { geo in
@@ -350,6 +454,14 @@ private struct ChromatogramCanvas: View {
                     x: x
                 )
 
+                // 1b) Q20 / Q30 reference lines across the histogram.
+                drawQualityReferenceLines(
+                    ctx: &ctx,
+                    size: size,
+                    traceTop: traceTop,
+                    traceHeight: traceHeight
+                )
+
                 // 2) Selection column (full height: spans strip + traces).
                 drawSelectionColumn(
                     ctx: &ctx,
@@ -388,8 +500,145 @@ private struct ChromatogramCanvas: View {
                     anchor: .topLeading
                 )
             }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let moved = hypot(value.translation.width, value.translation.height)
+                        if moved >= tapDragThreshold {
+                            handlePan(translation: value.translation, canvasSize: geo.size)
+                        }
+                    }
+                    .onEnded { value in
+                        let moved = hypot(value.translation.width, value.translation.height)
+                        if moved < tapDragThreshold {
+                            handleTap(at: value.location, canvasSize: geo.size)
+                        }
+                        panBaseOffset = nil
+                    }
+            )
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        handlePinch(scale: value, canvasSize: geo.size)
+                    }
+                    .onEnded { _ in
+                        pinchBaseZoom = nil
+                        pinchBaseOffset = nil
+                    }
+            )
+            // NOTE: trackpad two-finger swipe (scroll-wheel) is not currently
+            // mapped to pan here. Hooking `scrollWheel` requires a custom
+            // NSHostingView subclass so the SwiftUI gesture recognizers for
+            // tap/drag keep working; that lives in a future pass. Click-drag
+            // and the Pan slider cover panning in the meantime.
         }
         .frame(minHeight: 300)
+    }
+
+    /// Convert a click/tap in canvas coordinates into the 0-based index of the
+    /// base whose peak is nearest that x, then invoke `onBaseTapped`. Mirrors
+    /// the sample-slicing logic used inside the draw pass so hit-testing stays
+    /// in lock-step with what's actually rendered at the current zoom/offset.
+    private func handleTap(at location: CGPoint, canvasSize: CGSize) {
+        guard let handler = onBaseTapped else { return }
+        guard !peakLocations.isEmpty, canvasSize.width > 0 else { return }
+
+        let count = min(samplesA.count, samplesC.count, samplesG.count, samplesT.count)
+        if count <= 1 { return }
+
+        let visibleCount = max(50, Int(Double(count) / zoomX))
+        let maxStart = max(0, count - visibleCount)
+        let start = Int(Double(maxStart) * offsetX)
+        let end = min(count, start + visibleCount)
+        let sliceCount = end - start
+        if sliceCount <= 1 { return }
+
+        let clampedX = max(0, min(canvasSize.width, location.x))
+        let t = clampedX / canvasSize.width
+        let sampleApprox = start + Int((t * Double(sliceCount - 1)).rounded())
+
+        guard let baseIdx = nearestBaseIndex(toSample: sampleApprox) else { return }
+        handler(baseIdx)
+    }
+
+    /// Binary-search `peakLocations` for the base whose peak is nearest `sample`.
+    private func nearestBaseIndex(toSample sample: Int) -> Int? {
+        guard !peakLocations.isEmpty else { return nil }
+        var lo = 0
+        var hi = peakLocations.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if peakLocations[mid] < sample {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+        if lo > 0 && abs(peakLocations[lo - 1] - sample) < abs(peakLocations[lo] - sample) {
+            return lo - 1
+        }
+        return lo
+    }
+
+    // MARK: - Pan / zoom handlers
+
+    /// Convert a drag translation into an `offsetX` delta, anchored at the
+    /// offset where the drag began. Dragging right shifts the view to earlier
+    /// samples (offsetX decreases); dragging left advances (offsetX increases).
+    private func handlePan(translation: CGSize, canvasSize: CGSize) {
+        let count = sampleCount
+        guard count > 1, canvasSize.width > 0 else { return }
+
+        let visibleCount = max(50, Int(Double(count) / zoomX))
+        let maxStart = max(0, count - visibleCount)
+        guard maxStart > 0 else { return }
+
+        if panBaseOffset == nil { panBaseOffset = offsetX }
+        guard let base = panBaseOffset else { return }
+
+        let samplesPerPixel = Double(visibleCount) / canvasSize.width
+        let sampleDelta = -Double(translation.width) * samplesPerPixel
+        let offsetDelta = sampleDelta / Double(maxStart)
+        offsetX = clamp01(base + offsetDelta)
+    }
+
+    /// Update `zoomX` (and adjust `offsetX`) so the sample at the visible
+    /// center when the pinch began stays near the visible center during the
+    /// gesture. Without this correction a pinch feels like it "snaps" the
+    /// view back to the trace start.
+    private func handlePinch(scale: CGFloat, canvasSize: CGSize) {
+        let count = sampleCount
+        guard count > 1 else { return }
+
+        if pinchBaseZoom == nil {
+            pinchBaseZoom = zoomX
+            pinchBaseOffset = offsetX
+        }
+        guard let baseZoom = pinchBaseZoom, let baseOffset = pinchBaseOffset else { return }
+
+        let newZoom = min(max(baseZoom * Double(scale), zoomRange.lowerBound), zoomRange.upperBound)
+
+        let oldVisible = max(50, Int(Double(count) / baseZoom))
+        let oldMaxStart = max(0, count - oldVisible)
+        let oldStart = baseOffset * Double(oldMaxStart)
+        let centerSample = oldStart + Double(oldVisible) / 2
+
+        let newVisible = max(50, Int(Double(count) / newZoom))
+        let newMaxStart = max(0, count - newVisible)
+        let newStart = centerSample - Double(newVisible) / 2
+        let newOffset = newMaxStart > 0 ? clamp01(newStart / Double(newMaxStart)) : 0
+
+        zoomX = newZoom
+        offsetX = newOffset
+    }
+
+    private var sampleCount: Int {
+        min(samplesA.count, samplesC.count, samplesG.count, samplesT.count)
+    }
+
+    private func clamp01(_ v: Double) -> Double {
+        min(max(v, 0), 1)
     }
 
     private func drawQualityHistogram(
@@ -437,6 +686,42 @@ private struct ChromatogramCanvas: View {
 
             let rect = CGRect(x: xLeft, y: y0, width: xRight - xLeft, height: barHeight)
             ctx.fill(Path(rect), with: .color(histogramColor))
+        }
+    }
+
+    private func drawQualityReferenceLines(
+        ctx: inout GraphicsContext,
+        size: CGSize,
+        traceTop: Double,
+        traceHeight: Double
+    ) {
+        guard qualities != nil, !peakLocations.isEmpty else { return }
+
+        let references: [(q: Double, label: String)] = [(20, "Q20"), (30, "Q30")]
+        let lineColor = Color(red: 0.45, green: 0.60, blue: 0.80).opacity(0.55)
+        let maxBarHeight = traceHeight * 0.60
+
+        for ref in references {
+            let qNorm = min(ref.q / maxPhred, 1.0)
+            let barHeight = qNorm * maxBarHeight
+            let y = traceTop + traceHeight - barHeight
+
+            var path = Path()
+            path.move(to: CGPoint(x: 0, y: y))
+            path.addLine(to: CGPoint(x: size.width, y: y))
+            ctx.stroke(
+                path,
+                with: .color(lineColor),
+                style: StrokeStyle(lineWidth: 0.75, dash: [3, 3])
+            )
+
+            ctx.draw(
+                Text(ref.label)
+                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundColor(.secondary),
+                at: CGPoint(x: size.width - 4, y: y - 2),
+                anchor: .bottomTrailing
+            )
         }
     }
 
@@ -548,3 +833,4 @@ private struct ChromatogramCanvas: View {
         }
     }
 }
+
