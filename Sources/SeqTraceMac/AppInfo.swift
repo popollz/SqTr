@@ -6,7 +6,7 @@ enum AppInfo {
     static let name = "Swift SeqTrace"
 
     /// User-visible version (e.g. 0.1.0).
-    static let marketingVersion = "0.1.0"
+    static let marketingVersion = "0.1.1"
 
     /// Increment per release (shown in About as the build).
     static let build = "1"
