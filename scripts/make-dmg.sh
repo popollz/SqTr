@@ -65,6 +65,16 @@ else
   echo "warning: resource bundle not found at $BUNDLE (Help → User Guide may be empty)" >&2
 fi
 
+# Ship the .icns at the bundle root so Finder / Dock / Launchpad pick it up.
+ICNS_SRC="${ROOT}/Sources/SeqTraceMac/Resources/AppIcon.icns"
+if [[ -f "$ICNS_SRC" ]]; then
+  cp "$ICNS_SRC" "${APP}/Contents/Resources/AppIcon.icns"
+  HAS_ICON=1
+else
+  echo "warning: AppIcon.icns missing at $ICNS_SRC (bundle will ship without a custom icon)" >&2
+  HAS_ICON=0
+fi
+
 INFO_PLIST="${APP}/Contents/Info.plist"
 cat > "$INFO_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -77,6 +87,8 @@ cat > "$INFO_PLIST" <<EOF
   <string>${DISPLAY_APP_NAME}</string>
   <key>CFBundleExecutable</key>
   <string>SeqTraceMac</string>
+$( [[ "$HAS_ICON" == "1" ]] && echo "  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>" )
   <key>CFBundleIdentifier</key>
   <string>org.swiftseqtrace.app</string>
   <key>CFBundleInfoDictionaryVersion</key>

@@ -18,6 +18,8 @@ let package = Package(
             name: "SeqTraceMac",
             resources: [
                 .copy("Resources/USER_GUIDE.md"),
+                .copy("Resources/AppIcon.icns"),
+                .copy("Resources/AppIcon-1024.png"),
             ]
         ),
         .testTarget(
