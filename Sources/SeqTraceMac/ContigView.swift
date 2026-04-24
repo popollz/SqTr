@@ -22,21 +22,26 @@ struct ContigView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .firstTextBaseline) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Contig")
                             .font(.headline)
                         Text("\(result.forwardName)  +  \(result.reverseName)\(result.reverseWasReverseComplemented ? " (rev-comp)" : "")")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
 
-                    Spacer()
+                    Spacer(minLength: 8)
 
                     Text("score \(result.alignmentScore)")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .layoutPriority(1)
+                        .fixedSize()
                 }
+                .padding(.top, 4)
 
                 VStack(alignment: .leading, spacing: 14) {
                     ChromatogramView(

@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct SeqTraceMacApp: App {
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(AppInfo.name) {
             ContentView()
                 .onAppear {
                     DockIcon.applyPlaceholderIfNeeded()
